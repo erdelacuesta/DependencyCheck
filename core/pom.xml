@@ -464,6 +464,12 @@ Copyright (c) 2012 Jeremy Long. All Rights Reserved.
             <groupId>org.eclipse.packager</groupId>
             <artifactId>packager-rpm</artifactId>
         </dependency>
+        <!--ponemos jackson para leer el json-->
+        <dependency>
+    		<groupId>com.fasterxml.jackson.core</groupId>
+    		<artifactId>jackson-databind</artifactId>
+    		<version>${jackson.version}</version>
+		</dependency>
     </dependencies>
     <profiles>
         <profile>

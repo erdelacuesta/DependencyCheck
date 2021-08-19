@@ -24,6 +24,8 @@ import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.Iterator;
+
 import javax.annotation.concurrent.ThreadSafe;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.ParserConfigurationException;
@@ -38,6 +40,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.w3c.dom.Document;
 import org.xml.sax.SAXException;
+
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
  * Class of methods to search Nexus repositories.
@@ -98,7 +104,7 @@ public class NexusSearch {
             throw new IllegalArgumentException("Invalid SHA1 format");
         }
 
-        final URL url = new URL(rootURL, String.format("identify/sha1/%s",
+        final URL url = new URL(rootURL, String.format("search?sha1=%s",
                 sha1.toLowerCase()));
 
         LOGGER.debug("Searching Nexus url {}", url);
@@ -118,49 +124,58 @@ public class NexusSearch {
 
         // JSON would be more elegant, but there's not currently a dependency
         // on JSON, so don't want to add one just for this
-        conn.addRequestProperty("Accept", "application/xml");
+        conn.addRequestProperty("Accept", "application/json");
         conn.connect();
 
         switch (conn.getResponseCode()) {
             case 200:
                 try {
-                    final DocumentBuilder builder = XmlUtils.buildSecureDocumentBuilder();
-                    final Document doc = builder.parse(conn.getInputStream());
-                    final XPath xpath = XPathFactory.newInstance().newXPath();
-                    final String groupId = xpath
-                            .evaluate(
-                                    "/org.sonatype.nexus.rest.model.NexusArtifact/groupId",
-                                    doc);
-                    final String artifactId = xpath.evaluate(
-                            "/org.sonatype.nexus.rest.model.NexusArtifact/artifactId",
-                            doc);
-                    final String version = xpath
-                            .evaluate(
-                                    "/org.sonatype.nexus.rest.model.NexusArtifact/version",
-                                    doc);
-                    final String link = xpath
-                            .evaluate(
-                                    "/org.sonatype.nexus.rest.model.NexusArtifact/artifactLink",
-                                    doc);
-                    final String pomLink = xpath
-                            .evaluate(
-                                    "/org.sonatype.nexus.rest.model.NexusArtifact/pomLink",
-                                    doc);
+                	
+                	ObjectMapper mapper = new ObjectMapper();
+                	JsonNode rootNode = mapper.readTree(conn.getInputStream());
+                	String groupId="";
+                	String artifactId="";
+                	String version="";
+                	JsonNode arrayNode = rootNode.get("items");
+                	Iterator<JsonNode> jsonNodeIterator = arrayNode.elements();
+                	if(jsonNodeIterator.hasNext()) {
+                		JsonNode itemNode = jsonNodeIterator.next();
+                		Iterator<String> fieldNames = itemNode.fieldNames();
+                	    if (fieldNames.hasNext()) {
+                	    	LOGGER.debug("Hay datos en Nexus de la libreria");
+                	    	while (fieldNames.hasNext()) {
+                    	        String field = fieldNames.next();
+                    	        if (field.equalsIgnoreCase("group")) {
+                    	        	groupId=itemNode.get(field).toString();
+                    	        } else if (field.equalsIgnoreCase("name")) {
+                    	        	artifactId=itemNode.get(field).toString();
+                    	        } else if (field.equalsIgnoreCase("version")) {
+                    	        	version=itemNode.get(field).toString();
+                    	        }  
+                    	    }
+                	    	LOGGER.debug("groupId vale: "+ groupId +
+                	        		"artifactId vale: "+ artifactId +
+                	        		"version vale: "+ version);
+                	    }else {
+                    		throw new FileNotFoundException
+                    					("Artifact not found in Nexus");
+                    	}             		
+                	    
+                	}else {
+                		throw new FileNotFoundException("Artifact not found in Nexus");
+                	}
+
+                   
                     final MavenArtifact ma = new MavenArtifact(groupId, artifactId, version);
-                    if (link != null && !link.isEmpty()) {
-                        ma.setArtifactUrl(link);
-                    }
-                    if (pomLink != null && !pomLink.isEmpty()) {
-                        ma.setPomUrl(pomLink);
-                    }
+                    
                     return ma;
-                } catch (ParserConfigurationException | IOException | SAXException | XPathExpressionException e) {
+                } catch (IOException e) {
                     // Anything else is jacked-up XML stuff that we really can't recover
                     // from well
                     throw new IOException(e.getMessage(), e);
                 }
             case 404:
-                throw new FileNotFoundException("Artifact not found in Nexus");
+                throw new FileNotFoundException("Could not connect to Nexus");
             default:
                 LOGGER.debug("Could not connect to Nexus received response code: {} {}",
                         conn.getResponseCode(), conn.getResponseMessage());
@@ -180,7 +195,7 @@ public class NexusSearch {
             final URL url = new URL(rootURL, "status");
             final URLConnectionFactory factory = new URLConnectionFactory(settings);
             conn = factory.createHttpURLConnection(url, useProxy);
-            conn.addRequestProperty("Accept", "application/xml");
+            conn.addRequestProperty("Accept", "application/json");
             final String authHeader = buildHttpAuthHeaderValue();
             if (!authHeader.isEmpty()) {
                 conn.addRequestProperty("Authorization", authHeader);
@@ -190,14 +205,7 @@ public class NexusSearch {
                 LOGGER.warn("Expected 200 result from Nexus, got {}", conn.getResponseCode());
                 return false;
             }
-            final DocumentBuilder builder = XmlUtils.buildSecureDocumentBuilder();
-
-            final Document doc = builder.parse(conn.getInputStream());
-            if (!"status".equals(doc.getDocumentElement().getNodeName())) {
-                LOGGER.warn("Expected root node name of status, got {}", doc.getDocumentElement().getNodeName());
-                return false;
-            }
-        } catch (IOException | ParserConfigurationException | SAXException e) {
+        } catch (IOException e) {
             LOGGER.warn("Pre-flight request to Nexus failed: ", e);
             return false;
         }
